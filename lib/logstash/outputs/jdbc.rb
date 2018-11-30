@@ -73,7 +73,7 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
   # We buffer a certain number of events before flushing that out to SQL.
   # This setting controls how many events will be buffered before sending a
   # batch of events.
-  config :flush_size, validate: :number, default: 2000
+  config :flush_size, validate: :number, default: 1000
 
   # Set initial interval in seconds between retries. Doubled on each retry up to `retry_max_interval`
   config :retry_initial_interval, validate: :number, default: 2
@@ -116,7 +116,7 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
 
     @stopping = Concurrent::AtomicBoolean.new(false)
 
-    @logger.warn('JDBC - Flush size is set to > 1000') if @flush_size > 100000
+    @logger.warn('JDBC - Flush size is set to > 1000') if @flush_size > 1000
 
     if @statement.empty?
       @logger.error('JDBC - No statement provided. Configuration error.')
