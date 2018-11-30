@@ -19,19 +19,19 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
   STRFTIME_FMT = '%Y-%m-%d %T.%L'.freeze
 
   RETRYABLE_SQLSTATE_CLASSES = [
-    # Classes of retryable SQLSTATE codes
-    # Not all in the class will be retryable. However, this is the best that 
-    # we've got right now.
-    # If a custom state code is required, set it in retry_sql_states.
-    '08', # Connection Exception
-    '24', # Invalid Cursor State (Maybe retry-able in some circumstances)
-    '25', # Invalid Transaction State 
-    '40', # Transaction Rollback 
-    '53', # Insufficient Resources
-    '54', # Program Limit Exceeded (MAYBE)
-    '55', # Object Not In Prerequisite State
-    '57', # Operator Intervention
-    '58', # System Error
+      # Classes of retryable SQLSTATE codes
+      # Not all in the class will be retryable. However, this is the best that
+      # we've got right now.
+      # If a custom state code is required, set it in retry_sql_states.
+      '08', # Connection Exception
+      '24', # Invalid Cursor State (Maybe retry-able in some circumstances)
+      '25', # Invalid Transaction State
+      '40', # Transaction Rollback
+      '53', # Insufficient Resources
+      '54', # Program Limit Exceeded (MAYBE)
+      '55', # Object Not In Prerequisite State
+      '57', # Operator Intervention
+      '58', # System Error
   ].freeze
 
   config_name 'jdbc'
@@ -73,7 +73,7 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
   # We buffer a certain number of events before flushing that out to SQL.
   # This setting controls how many events will be buffered before sending a
   # batch of events.
-  config :flush_size, validate: :number, default: 1000
+  config :flush_size, validate: :number, default: 2000
 
   # Set initial interval in seconds between retries. Doubled on each retry up to `retry_max_interval`
   config :retry_initial_interval, validate: :number, default: 2
@@ -81,7 +81,7 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
   # Maximum time between retries, in seconds
   config :retry_max_interval, validate: :number, default: 128
 
-  # Any additional custom, retryable SQL state codes. 
+  # Any additional custom, retryable SQL state codes.
   # Suitable for configuring retryable custom JDBC SQL state codes.
   config :retry_sql_states, validate: :array, default: []
 
@@ -100,12 +100,14 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
   config :max_repeat_exceptions, obsolete: 'This has been replaced by max_flush_exceptions - which behaves slightly differently. Please check the documentation.'
   config :max_repeat_exceptions_time, obsolete: 'This is no longer required'
   config :idle_flush_time, obsolete: 'No longer necessary under Logstash v5'
-  
+
   # Allows the whole event to be converted to JSON
   config :enable_event_as_json_keyword, validate: :boolean, default: false
-  
+
   # The magic key used to convert the whole event to JSON. If you need this, and you have the default in your events, you can use this to change your magic keyword.
   config :event_as_json_keyword, validate: :string, default: '@event'
+
+  config :commit_size, validate: :number, default: 32768
 
   def register
     @logger.info('JDBC - Starting up')
@@ -114,7 +116,7 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
 
     @stopping = Concurrent::AtomicBoolean.new(false)
 
-    @logger.warn('JDBC - Flush size is set to > 1000') if @flush_size > 1000
+    @logger.warn('JDBC - Flush size is set to > 1000') if @flush_size > 100000
 
     if @statement.empty?
       @logger.error('JDBC - No statement provided. Configuration error.')
@@ -122,6 +124,16 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
 
     if !@unsafe_statement && @statement.length < 2
       @logger.error("JDBC - Statement has no parameters. No events will be inserted into SQL as you're not passing any event data. Likely configuration error.")
+    end
+
+    @stmt_prefix = @statement[0]
+    fst_tmp = @stmt_prefix.index("(")
+    snd_prefix = @stmt_prefix[fst_tmp + 1, @stmt_prefix.length]
+    snd_tmp = snd_prefix.index("(")
+    if snd_tmp == nil
+      @pre_len = fst_tmp
+    else
+      @pre_len = fst_tmp + snd_tmp + 1
     end
 
     setup_and_test_pool!
@@ -204,6 +216,8 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
     connection = nil
     statement = nil
     events_to_retry = []
+    insert_sql = ""
+    sql_len = 0
 
     begin
       connection = @pool.getConnection
@@ -214,20 +228,37 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
       return events, false
     end
 
-    events.each do |event|
-      begin
+    begin
+      events.each do |event|
         statement = connection.prepareStatement(
-          (@unsafe_statement == true) ? event.sprintf(@statement[0]) : @statement[0]
+            (@unsafe_statement == true) ? event.sprintf(@statement[0]) : @statement[0]
         )
-        statement = add_statement_event_params(statement, event) if @statement.length > 1
-        statement.execute
-      rescue => e
-        if retry_exception?(e, event.to_json())
-          events_to_retry.push(event)
+        begin
+          statement = add_statement_event_params(statement, event) if @statement.length > 1
+          stmt_str = statement.toString
+          one_sql = stmt_str[stmt_str.index(": ") + 2, stmt_str.length]
+          if sql_len + one_sql.length >= @commit_size
+            statement.execute(insert_sql)
+            sql_len = 0
+            insert_sql = ""
+          end
+          if sql_len == 0
+            insert_sql = one_sql
+            sql_len = one_sql.length
+          else
+            insert_sql.concat(",").concat(one_sql[@pre_len, one_sql.length])
+            sql_len = sql_len + one_sql.length - @pre_len
+          end
+        rescue => e
+          retry_exception?(e, event.to_json())
         end
-      ensure
-        statement.close unless statement.nil?
       end
+      statement.execute(insert_sql)
+    rescue => e
+      @logger.error("Submit data error, sql is #{insert_sql}, error is #{e}")
+      events_to_retry = events
+    ensure
+      statement.close unless statement.nil?
     end
 
     connection.close unless connection.nil?
@@ -262,7 +293,7 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
 
       # If we're retrying the action sleep for the recommended interval
       # Double the interval for the next time through to achieve exponential backoff
-      Stud.stoppable_sleep(sleep_interval) { @stopping.true? }
+      Stud.stoppable_sleep(sleep_interval) {@stopping.true?}
       sleep_interval = next_sleep_interval(sleep_interval)
     end
   end
@@ -292,7 +323,8 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
         # choke on the 'T' in the string (Known: Derby).
         #
         # strftime appears to be the most reliable across drivers.
-        statement.setString(idx + 1, value.time.strftime(STRFTIME_FMT))
+        #statement.setString(idx + 1, value.time.strftime(STRFTIME_FMT))
+        statement.setString(idx + 1, value.time.strftime("%Y-%m-%d %H:%M:%S"))
       when Fixnum, Integer
         if value > 2147483647 or value < -2147483648
           statement.setLong(idx + 1, value)
@@ -318,7 +350,7 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
   end
 
   def retry_exception?(exception, event)
-    retrying = (exception.respond_to? 'getSQLState' and (RETRYABLE_SQLSTATE_CLASSES.include?(exception.getSQLState.to_s[0,2]) or @retry_sql_states.include?(exception.getSQLState)))
+    retrying = (exception.respond_to? 'getSQLState' and (RETRYABLE_SQLSTATE_CLASSES.include?(exception.getSQLState.to_s[0, 2]) or @retry_sql_states.include?(exception.getSQLState)))
     log_jdbc_exception(exception, retrying, event)
 
     retrying
@@ -326,8 +358,8 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
 
   def log_jdbc_exception(exception, retrying, event)
     current_exception = exception
-    log_text = 'JDBC - Exception. ' + (retrying ? 'Retrying' : 'Not retrying') 
-    
+    log_text = 'JDBC - Exception. ' + (retrying ? 'Retrying' : 'Not retrying')
+
     log_method = (retrying ? 'warn' : 'error')
 
     loop do
