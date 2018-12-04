@@ -4,7 +4,7 @@ require 'logstash/namespace'
 require 'concurrent'
 require 'stud/interval'
 require 'java'
-require 'logstash-output-jdbc_jars'
+require 'logstash-output-analyticdb_jars'
 require 'json'
 require 'bigdecimal'
 
@@ -13,7 +13,7 @@ require 'bigdecimal'
 # It is upto the user of the plugin to correctly configure the plugin. This
 # includes correctly crafting the SQL statement, and matching the number of
 # parameters correctly.
-class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
+class LogStash::Outputs::Analyticdb < LogStash::Outputs::Base
   concurrency :shared
 
   STRFTIME_FMT = '%Y-%m-%d %T.%L'.freeze
@@ -34,7 +34,7 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
       '58', # System Error
   ].freeze
 
-  config_name 'jdbc'
+  config_name 'analyticdb'
 
   # Driver class - Reintroduced for https://github.com/theangryangel/logstash-output-jdbc/issues/26
   config :driver_class, validate: :string
@@ -89,7 +89,6 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
   config :connection_test, validate: :boolean, default: true
 
   # Connection test and init string, required for some JDBC endpoints
-  # notable phoenix-thin - see logstash-output-jdbc issue #60
   config :connection_test_query, validate: :string, required: false
 
   # Maximum number of sequential failed attempts, before we stop retrying.
@@ -218,6 +217,7 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
     events_to_retry = []
     insert_sql = ""
     sql_len = 0
+    is_insert_err = false
 
     begin
       connection = @pool.getConnection
@@ -256,10 +256,30 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
       statement.execute(insert_sql)
     rescue => e
       @logger.error("Submit data error, sql is #{insert_sql}, error is #{e}")
-      events_to_retry = events
+      is_insert_err = true
     ensure
       statement.close unless statement.nil?
     end
+
+    # retry each event
+    if is_insert_err
+      events.each do |event|
+        begin
+          statement = connection.prepareStatement(
+              (@unsafe_statement == true) ? event.sprintf(@statement[0]) : @statement[0]
+          )
+          statement = add_statement_event_params(statement, event) if @statement.length > 1
+          statement.execute
+        rescue => e
+          if retry_exception?(e, event.to_json())
+            events_to_retry.push(event)
+          end
+        ensure
+          statement.close unless statement.nil?
+        end
+      end
+    end
+    # retry each event end
 
     connection.close unless connection.nil?
 
@@ -381,4 +401,4 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
     doubled = current_interval * 2
     doubled > @retry_max_interval ? @retry_max_interval : doubled
   end
-end # class LogStash::Outputs::jdbc
+end # class LogStash::Outputs::analyticdb

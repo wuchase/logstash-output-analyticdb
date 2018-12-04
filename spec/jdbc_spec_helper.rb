@@ -1,5 +1,5 @@
 require 'logstash/devutils/rspec/spec_helper'
-require 'logstash/outputs/jdbc'
+require 'logstash/outputs/analyticdb'
 require 'stud/temporary'
 require 'java'
 require 'securerandom'

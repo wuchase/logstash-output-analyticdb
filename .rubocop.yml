@@ -22,4 +22,4 @@ Metrics/MethodLength:
 
 Style/FileName:
   Exclude:
-    - 'lib/logstash-output-jdbc_jars.rb'
+    - 'lib/logstash-output-analyticdb_jars.rb'

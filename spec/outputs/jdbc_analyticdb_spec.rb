@@ -1,6 +1,6 @@
 require_relative '../jdbc_spec_helper'
 
-describe 'logstash-output-jdbc: mysql', if: ENV['JDBC_MYSQL_JAR'] do
+describe 'logstash-output-analyticdb: AnalyticDB', if: ENV['JDBC_MYSQL_JAR'] do
   include_context 'rspec setup'
   include_context 'when outputting messages'
 
