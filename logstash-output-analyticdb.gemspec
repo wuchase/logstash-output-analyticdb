@@ -1,6 +1,6 @@
 Gem::Specification.new do |s|
   s.name = 'logstash-output-analyticdb'
-  s.version = '5.4.0.4'
+  s.version = '5.4.0.5'
   s.licenses = ['Apache License (2.0)']
   s.summary = 'This plugin allows you to output to SQL, via JDBC'
   s.description = "This gem is a logstash plugin required to be installed on top of the Logstash core pipeline using $LS_HOME/bin/logstash-plugin install 'logstash-output-analyticdb'. This gem is not a stand-alone program"
