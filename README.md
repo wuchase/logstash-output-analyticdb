@@ -6,14 +6,6 @@ This plugin is provided as an external plugin and is not part of the Logstash pr
 This plugin allows you to output to AnalyticDB database, using JDBC adapters.
 See below for tested adapters, and example configurations.
 
-## Support & release schedule
-I no longer have time at work to maintain this plugin in step with Logstash's releases, and I am not completely immersed in the Logstash ecosystem. If something is broken for you I will do my best to help, but I cannot guarantee timeframes.
-
-Pull requests are always welcome. 
-
-## Changelog
-See CHANGELOG.md
-
 ## Versions
 Released versions are available via rubygems, and typically tagged.
 
