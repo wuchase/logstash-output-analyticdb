@@ -217,8 +217,6 @@ class LogStash::Outputs::Analyticdb < LogStash::Outputs::Base
     connection = nil
     statement = nil
     events_to_retry = []
-    insert_sql = ""
-    sql_len = 0
     is_insert_err = false
 
     begin
@@ -231,7 +229,10 @@ class LogStash::Outputs::Analyticdb < LogStash::Outputs::Base
     end
 
     begin
-      events.each do |event|
+      pos = 0
+      insert_sql = ""
+      while pos < events.size do
+        event = events[pos]
         statement = connection.prepareStatement(
             (@unsafe_statement == true) ? event.sprintf(@statement[0]) : @statement[0]
         )
@@ -239,24 +240,39 @@ class LogStash::Outputs::Analyticdb < LogStash::Outputs::Base
           statement = add_statement_event_params(statement, event) if @statement.length > 1
           stmt_str = statement.toString
           one_sql = stmt_str[stmt_str.index(": ") + 2, stmt_str.length]
-          if sql_len + one_sql.length >= @commit_size
+          # on duplicate key start pos
+          on_duplicate_pos = one_sql.downcase.index(/on(\s+)duplicate/)
+          if on_duplicate_pos == nil
+            batch_insert_values_end_pos = one_sql.length
+          else
+            batch_insert_values_end_pos = on_duplicate_pos
+          end
+          # trigger batch insert
+          if insert_sql.length + one_sql.length >= @commit_size
+            if batch_insert_values_end_pos != one_sql.length
+              insert_sql.concat(one_sql[batch_insert_values_end_pos, one_sql.length - batch_insert_values_end_pos])
+            end
             statement.execute(insert_sql)
-            sql_len = 0
             insert_sql = ""
           end
-          if sql_len == 0
-            insert_sql = one_sql
-            sql_len = one_sql.length
+          if insert_sql.length == 0
+            insert_sql = one_sql[0, batch_insert_values_end_pos]
           else
-            insert_sql.concat(",").concat(one_sql[@pre_len, one_sql.length])
-            sql_len = sql_len + one_sql.length - @pre_len
+            insert_sql = insert_sql.rstrip
+            insert_sql.concat(", ").concat(one_sql[@pre_len, batch_insert_values_end_pos - @pre_len])
           end
+          # loop to end
+          if pos == events.size - 1
+            if batch_insert_values_end_pos != one_sql.length
+              insert_sql.concat(one_sql[batch_insert_values_end_pos, one_sql.length - batch_insert_values_end_pos])
+            end
+            statement.execute(insert_sql)
+          end
+          pos += 1
         rescue => e
           retry_exception?(e, event.to_json())
-          is_insert_err = true
         end
       end
-      statement.execute(insert_sql)
     rescue => e
       @logger.error("Submit data error, sql is #{insert_sql}, error is #{e}")
       is_insert_err = true
