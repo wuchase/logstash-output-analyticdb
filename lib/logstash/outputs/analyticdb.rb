@@ -94,7 +94,7 @@ class LogStash::Outputs::Analyticdb < LogStash::Outputs::Base
   # Maximum number of sequential failed attempts, before we stop retrying.
   # If set to < 1, then it will infinitely retry.
   # At the default values this is a little over 10 minutes
-  config :max_flush_exceptions, validate: :number, default: 10
+  config :max_flush_exceptions, validate: :number, default: 100
 
   config :max_repeat_exceptions, obsolete: 'This has been replaced by max_flush_exceptions - which behaves slightly differently. Please check the documentation.'
   config :max_repeat_exceptions_time, obsolete: 'This is no longer required'
@@ -107,6 +107,8 @@ class LogStash::Outputs::Analyticdb < LogStash::Outputs::Base
   config :event_as_json_keyword, validate: :string, default: '@event'
 
   config :commit_size, validate: :number, default: 32768
+
+  config :skip_exception, validate: :boolean, default: false
 
   def register
     @logger.info('JDBC - Starting up')
@@ -251,6 +253,7 @@ class LogStash::Outputs::Analyticdb < LogStash::Outputs::Base
           end
         rescue => e
           retry_exception?(e, event.to_json())
+          is_insert_err = true
         end
       end
       statement.execute(insert_sql)
@@ -306,8 +309,11 @@ class LogStash::Outputs::Analyticdb < LogStash::Outputs::Base
         attempts += 1
 
         if attempts > @max_flush_exceptions
-          @logger.error("JDBC - max_flush_exceptions has been reached. #{submit_actions.length} events have been unable to be sent to SQL and are being dropped. See previously logged exceptions for details.")
-          break
+          if (@skip_exception)
+            @logger.error("JDBC - max_flush_exceptions has been reached. #{submit_actions.length} events have been unable to be sent to SQL and are being skipped. See previously logged exceptions for details.")
+            break
+          end
+          raise "JDBC - max_flush_exceptions #{max_flush_exceptions} has been reached. #{submit_actions.length} events have been unable to be sent to SQL and are crashed. See previously logged exceptions for details."
         end
       end
 
@@ -370,7 +376,8 @@ class LogStash::Outputs::Analyticdb < LogStash::Outputs::Base
   end
 
   def retry_exception?(exception, event)
-    retrying = (exception.respond_to? 'getSQLState' and (RETRYABLE_SQLSTATE_CLASSES.include?(exception.getSQLState.to_s[0, 2]) or @retry_sql_states.include?(exception.getSQLState)))
+    # retrying = (exception.respond_to? 'getSQLState' and (RETRYABLE_SQLSTATE_CLASSES.include?(exception.getSQLState.to_s[0, 2]) or @retry_sql_states.include?(exception.getSQLState)))
+    retrying = true
     log_jdbc_exception(exception, retrying, event)
 
     retrying
