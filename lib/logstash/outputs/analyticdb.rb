@@ -231,6 +231,7 @@ class LogStash::Outputs::Analyticdb < LogStash::Outputs::Base
     begin
       pos = 0
       insert_sql = ""
+      @logger.debug("events size: #{events.size}")
       while pos < events.size do
         event = events[pos]
         statement = connection.prepareStatement(
@@ -247,11 +248,16 @@ class LogStash::Outputs::Analyticdb < LogStash::Outputs::Base
           else
             batch_insert_values_end_pos = on_duplicate_pos
           end
+          @logger.debug("one_sql: #{one_sql}")
           # trigger batch insert
           if insert_sql.length + one_sql.length >= @commit_size
+            if insert_sql.length == 0
+              insert_sql = one_sql[0, batch_insert_values_end_pos]
+            end
             if batch_insert_values_end_pos != one_sql.length
               insert_sql.concat(one_sql[batch_insert_values_end_pos, one_sql.length - batch_insert_values_end_pos])
             end
+            @logger.debug("batch 1 insert sql: #{insert_sql}")
             statement.execute(insert_sql)
             insert_sql = ""
           end
@@ -266,6 +272,7 @@ class LogStash::Outputs::Analyticdb < LogStash::Outputs::Base
             if batch_insert_values_end_pos != one_sql.length
               insert_sql.concat(one_sql[batch_insert_values_end_pos, one_sql.length - batch_insert_values_end_pos])
             end
+            @logger.debug("batch 2 insert sql: #{insert_sql}")
             statement.execute(insert_sql)
           end
           pos += 1
